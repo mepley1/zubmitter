@@ -42,13 +42,13 @@ pub fn build(b: *std.Build) void {
     // Modules can depend on one another using the `std.Build.Module.addImport` function.
     // This is what allows Zig source code to use `@import("foo")` where 'foo' is not a
     // file path. In this case, we set up `exe_mod` to import `lib_mod`.
-    exe_mod.addImport("zubmit_lib", lib_mod);
+    exe_mod.addImport("zreporter_lib", lib_mod);
 
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
     // for actually invoking the compiler.
     const lib = b.addStaticLibrary(.{
-        .name = "zubmit",
+        .name = "zreporter",
         .root_module = lib_mod,
     });
 
@@ -60,7 +60,7 @@ pub fn build(b: *std.Build) void {
     // This creates another `std.Build.Step.Compile`, but this one builds an executable
     // rather than a static library.
     const exe = b.addExecutable(.{
-        .name = "zubmit",
+        .name = "zreporter",
         .root_module = exe_mod,
     });
 
@@ -112,5 +112,4 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
-
 }
