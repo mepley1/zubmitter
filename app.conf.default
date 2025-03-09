@@ -1,4 +1,5 @@
 {
 "key": "abc123",
-"default_comment": "Default comment"
+"default_comment": "Default comment",
+"debug": false
 }
