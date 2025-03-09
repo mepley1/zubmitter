@@ -4,6 +4,8 @@ Another CLI tool for submitting abuse reports to AbuseIPDB API, written in Zig.
 
 Supports the REPORT and CLEAR-ADDRESS endpoints.
 
+Linux only, for now.
+
 ## Usage
 
 `zreport <action: submit|delete> <ip_addr> <categories> <comment>`
