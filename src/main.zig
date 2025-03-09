@@ -57,8 +57,9 @@ const ReportParams = struct {
 /// Program config
 const ConfigData = struct {
     key: []u8,
-    default_comment: ?[]u8 = null,
     //default_comment: ?[]u8,
+    // Set a default value for it:
+    default_comment: ?[]u8 = null,
 };
 
 // Some types representing API response data.
@@ -83,7 +84,8 @@ const ApiResponse = struct {
     },
 };
 
-/// Categories accepted by API endpoint
+/// Categories accepted by API endpoint.
+/// Unused as of now
 const Categories = enum(u8) {
     dnsCompromise = 1,
     dnsPoisoning = 2,
@@ -124,7 +126,7 @@ fn printErrHelp(msg: [:0]const u8) void {
 }
 
 /// Print a horizontal line of length n, alternating colors each char.
-fn printHorizontalLine(allocator: Allocator, len: u8) !void {
+fn printHorizontalLineDecorated(allocator: Allocator, len: u8) !void {
     print("\n", .{});
     for (1..len + 1) |pos| {
         if (pos % 2 == 0) {
@@ -136,6 +138,7 @@ fn printHorizontalLine(allocator: Allocator, len: u8) !void {
     return;
 }
 
+/// Colors/style names, used with printStyled() below.
 const Style = enum {
     black,
     red,
@@ -181,14 +184,14 @@ fn printStyled(alloc: Allocator, color: Style, msg: []const u8) !void {
 
 /// Print the intro/title text to stderr
 fn printIntroMsg(allocator: Allocator) !void {
-    try printHorizontalLine(allocator, 34);
+    try printHorizontalLineDecorated(allocator, 34);
     try printStyled(allocator, .cyan, "\n AbuseIPDB report submission tool");
     try printStyled(allocator, .cyan, "\n             by rogueAutomaton();");
-    try printHorizontalLine(allocator, 34);
+    try printHorizontalLineDecorated(allocator, 34);
     return;
 }
 
-// Utility functions
+// ## UTILITY FUNCTIONS
 
 /// Allowed actions for 1st cli arg
 const Action = enum { submit, delete };
@@ -215,6 +218,7 @@ fn getIntendedAction(alloc: Allocator) !?Action {
     }
 }
 
+// Read first CL argument passed (action). Return as an Action enum
 fn getIntendedActionAlloc(alloc: Allocator) !?Action {
     const args = try std.process.argsAlloc(alloc);
     defer std.process.argsFree(alloc, args);
@@ -274,7 +278,8 @@ fn getCliArgs() ReportParams {
     return values;
 }
 
-/// Take a ReportParams and change the comment
+/// Take a ReportParams and change the comment.
+/// Return True if comment changed, else False.
 fn addDefaultComment(params: *ReportParams, new_cmt: [:0]u8) bool {
     if (params.*.comment) |val| {
         _ = val;
@@ -287,6 +292,7 @@ fn addDefaultComment(params: *ReportParams, new_cmt: [:0]u8) bool {
 
 /// Read and parse config file, return config values as a ConfigData struct.
 /// File must be in same dir as command is being run from.
+/// Caller must free returned result.key and result.default_comment.?
 fn readConfigFile(allocator: Allocator) !ConfigData {
     const cwd = std.fs.cwd();
     const handle = cwd.openFile(CONFIG_FILE_PATH, .{
@@ -312,10 +318,14 @@ fn readConfigFile(allocator: Allocator) !ConfigData {
     const value = parsed.value;
 
     // Dupe the values to avoid seg fault
+    // Function caller will need to free these.
     const config_data = ConfigData{
         .key = try allocator.dupe(u8, value.key),
         .default_comment = try allocator.dupe(u8, value.default_comment.?),
     };
+
+    errdefer allocator.free(config_data.key);
+    errdefer allocator.free(config_data.default_comment.?);
 
     std.testing.expect(config_data.key.len == 80) catch {
         print("\nInvalid API key. A valid key should be exactly 80 bytes long; found {d}.", .{config_data.key.len});
@@ -431,7 +441,7 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams)
 
     const uri = try std.Uri.parse(API_URL);
     const payload: []const u8 = report_params_json;
-    //print("\nReport body: {s}", .{payload});
+    print("\nReport body: {s}", .{payload});
 
     // BEGIN CHUNK BEING MOVED
 
@@ -473,28 +483,37 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams)
 
     // END CHUNK BEING MOVED
 
-    // TEST - MOVING ABOVE CHUNK TO A FUNCTION
+    // EXPERIMENTAL - MOVING ABOVE CHUNK TO A FUNCTION
     //const resp_body = try openConnection(allocator, &client, uri, payload, api_key);
     const resp_body = openConnection(allocator, &client, uri, payload, api_key) catch {
         return false;
     };
     defer allocator.free(resp_body);
 
-    // END TEST
+    // END EXPERIMENTAL
 
     // Parse response JSON + print it
     // Reference: https://cookbook.ziglang.cc/10-01-json.html
-    const parsed = try std.json.parseFromSlice(ApiResponse, allocator, resp_body, .{ .ignore_unknown_fields = true });
+    const parsed = std.json.parseFromSlice(ApiResponse, allocator, resp_body, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
+        std.json.Error.SyntaxError => {
+            print("\nError while parsing response body: {}", .{err});
+            // Debugging with fake API; don't print this in release
+            print("\nReponse body: {s}", .{resp_body});
+            return false;
+        },
+        else => return err,
+    };
     defer parsed.deinit();
 
     const value: ApiResponse = parsed.value;
     print("\nParsed response:", .{});
-    print("\nipAddress: {s}", .{value.data.ipAddress.?});
-    print("\nabuseConfidenceScore: {u}", .{value.data.abuseConfidenceScore.?});
+    print("\n  ipAddress: {s}", .{value.data.ipAddress.?});
+    print("\n  abuseConfidenceScore: {u}", .{value.data.abuseConfidenceScore.?});
 
     return true;
 }
 
+/// Open connection and write request body
 fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payload: []const u8, api_key: []const u8) ![]const u8 {
     print("\nOpening connection ...", .{});
     var buf: [1024]u8 = undefined;
@@ -534,12 +553,14 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
 
     //return resp_body;
     const x: []const u8 = try allocator.dupe(u8, resp_body);
+    errdefer allocator.free(x);
     return x;
 }
 
 /// Main loop.
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     _ = gpa.detectLeaks();
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -575,19 +596,19 @@ pub fn main() !void {
     var params: ReportParams = getCliArgs();
 
     // Validate IP
-    const ip_str = std.mem.span(params.ip);
-    const ip_is_valid = validateIpAddr(ip_str);
+    const ip_str: []const u8 = std.mem.span(params.ip);
+    const ip_is_valid: bool = validateIpAddr(ip_str);
     if (!ip_is_valid) {
         try printStyled(allocator, .red, "\nInvalid IP address.\n");
         return;
     }
 
-    // add default comment if none passed:
+    // Add default comment if one wasn't passed
+    const def_cmt_z = try allocator.dupeZ(u8, APP_CONFIG.default_comment.?);
+    defer allocator.free(def_cmt_z);
     if (action.? == .submit) {
-        const def_cmt_z = try allocator.dupeZ(u8, APP_CONFIG.default_comment.?); //testing
-        defer allocator.free(def_cmt_z);
-        const changed = addDefaultComment(&params, def_cmt_z);
-        if (changed) {
+        const comment_has_changed = addDefaultComment(&params, def_cmt_z);
+        if (comment_has_changed) {
             print("\nNo comment given. Using default. \n", .{});
         }
     }
@@ -602,6 +623,10 @@ pub fn main() !void {
     // Either submit a report, or clear reports, based on which action chosen.
     const successful: bool = switch (action.?) {
         .submit => try submitReport(allocator, APP_CONFIG.key, params),
+        //.submit => submitReport(allocator, APP_CONFIG.key, params) catch |err| switch (err) {
+        //    std.json.Error.SyntaxError => return error.Something,
+        //    else => return err,
+        //},
         .delete => try deleteReportsForAddr(allocator, APP_CONFIG.key, params.ip),
         //else => false,
     };
@@ -618,15 +643,6 @@ pub fn main() !void {
 
 // Some tests - far from complete but whatever
 
-/// This is for testing, see tests.
-var X_TESTS_PASSED: u8 = 0; // # passed of tracked tests
-
-var tests_pass_msg: []const u8 = undefined;
-
-test "set test message" {
-    tests_pass_msg = "\nTests passed (tracked): ";
-}
-
 test "print args vy argv" {
     const argc = std.os.argv.len;
     print("\n # args: {d}", .{argc});
@@ -636,7 +652,21 @@ test "print args vy argv" {
     }
 }
 
-test "validate an ip address input is valid" {
+test "print args via argsAlloc + argsWithAllocator" {
+    const args = try std.process.argsAlloc(std.testing.allocator);
+    defer std.process.argsFree(std.testing.allocator, args);
+    for (args) |arg| {
+        print("\n- arg: {s}", .{arg});
+    }
+
+    var args_iter = try std.process.argsWithAllocator(std.testing.allocator);
+    defer args_iter.deinit();
+    while (args_iter.next()) |arg| {
+        print("\n- arg: {s}", .{arg});
+    }
+}
+
+test "validate an inputted ip address" {
     var x: bool = undefined;
     // v4 good
     x = validateIpAddr("10.0.0.255");
@@ -652,7 +682,7 @@ test "validate an ip address input is valid" {
     try std.testing.expectEqual(false, x);
 }
 
-test "category numbers" {
+test "AbuseIPDB category numbers" {
     try std.testing.expectEqual(@as(u8, 15), Categories.hacking.catNum());
 }
 
