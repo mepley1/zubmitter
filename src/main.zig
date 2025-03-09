@@ -12,9 +12,6 @@ const Allocator = std.mem.Allocator;
 const Request = http.Client.Request;
 const print = std.debug.print;
 
-// Define API endpoints
-const API_URL: []const u8 = "https://api.abuseipdb.com/api/v2/report";
-const API_URL_CLEAR: []const u8 = "https://api.abuseipdb.com/api/v2/clear-address";
 const CONFIG_FILE_PATH: []const u8 = "./app.conf";
 
 const HELP_MSG: []const u8 =
@@ -60,6 +57,7 @@ const ConfigData = struct {
     //default_comment: ?[]u8,
     // Set a default value for it:
     default_comment: ?[]u8 = null,
+    debug: bool = false,
 };
 
 // Some types representing API response data.
@@ -322,6 +320,7 @@ fn readConfigFile(allocator: Allocator) !ConfigData {
     const config_data = ConfigData{
         .key = try allocator.dupe(u8, value.key),
         .default_comment = try allocator.dupe(u8, value.default_comment.?),
+        .debug = if (value.debug) true else false,
     };
 
     errdefer allocator.free(config_data.key);
@@ -369,12 +368,12 @@ fn parseResponseErrors(allocator: Allocator, req: *Request) !void {
 
 /// Send a DELETE request to API_URL_CLEAR, to delete all reports for given ip addr.
 /// Return true if successful, else false.
-fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8) !bool {
+fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8, API_URL_CLEAR: []const u8) !bool {
     const query_str: []const u8 = "?ipAddress=";
 
     // Concatenate endpoint uri + query str + ip:
-    const uri_no_ip: []const u8 = API_URL_CLEAR ++ query_str;
-    const uri_complete = try std.fmt.allocPrint(alloc, "{s}{s}", .{ uri_no_ip, ip_addr });
+    const uri_complete = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ API_URL_CLEAR, query_str, ip_addr });
+
     defer alloc.free(uri_complete);
 
     const uri = try std.Uri.parse(uri_complete);
@@ -427,7 +426,7 @@ fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8)
 }
 
 /// Submit a report to API REPORT endpoint. Return true if successful, else false.
-fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams) !bool {
+fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams, API_URL: []const u8) !bool {
     // Params were read from cli args
     const report_params = params;
 
@@ -441,7 +440,7 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams)
 
     const uri = try std.Uri.parse(API_URL);
     const payload: []const u8 = report_params_json;
-    print("\nReport body: {s}", .{payload});
+    //print("\nReport body: {s}", .{payload}); // Debugging
 
     // BEGIN CHUNK BEING MOVED
 
@@ -489,7 +488,6 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams)
         return false;
     };
     defer allocator.free(resp_body);
-
     // END EXPERIMENTAL
 
     // Parse response JSON + print it
@@ -498,7 +496,11 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams)
         std.json.Error.SyntaxError => {
             print("\nError while parsing response body: {}", .{err});
             // Debugging with fake API; don't print this in release
-            print("\nReponse body: {s}", .{resp_body});
+            if (resp_body.len < 256) {
+                print("\nReponse body: {s}", .{resp_body});
+            } else {
+                print("\nReponse body too big to print neatly. Length: {d}", .{resp_body.len});
+            }
             return false;
         },
         else => return err,
@@ -559,7 +561,6 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
 
 /// Main loop.
 pub fn main() !void {
-    //var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var gpa = std.heap.DebugAllocator(.{}){};
     _ = gpa.detectLeaks();
     defer _ = gpa.deinit();
@@ -576,6 +577,20 @@ pub fn main() !void {
     // These two values are duped in readConfigFile() and still need freed:
     defer allocator.free(APP_CONFIG.key);
     defer allocator.free(APP_CONFIG.default_comment.?);
+
+    // Define API endpoints - if APP_CONFIG.debug == true, then use a fake/local endpoint to avoid spamming AbuseIPDB with testing requests.
+    // Currently I'm using a local Flask app to capture/validate these dev requests - my honeypot app is perfect for this ;)
+    var API_URL: []const u8 = undefined;
+    var API_URL_CLEAR: []const u8 = undefined;
+
+    if (APP_CONFIG.debug == true) {
+        print("\nDebug mode: {}", .{APP_CONFIG.debug});
+        API_URL = "http://localhost:5000/api/v2/report";
+        API_URL_CLEAR = "http://localhost:5000/api/v2/clear-address";
+    } else {
+        API_URL = "https://api.abuseipdb.com/api/v2/report";
+        API_URL_CLEAR = "https://api.abuseipdb.com/api/v2/clear-address";
+    }
 
     // Read action arg (1st CLI arg) and set const accordingly.
     //const action = try getIntendedAction(allocator);
@@ -622,12 +637,13 @@ pub fn main() !void {
 
     // Either submit a report, or clear reports, based on which action chosen.
     const successful: bool = switch (action.?) {
-        .submit => try submitReport(allocator, APP_CONFIG.key, params),
-        //.submit => submitReport(allocator, APP_CONFIG.key, params) catch |err| switch (err) {
-        //    std.json.Error.SyntaxError => return error.Something,
-        //    else => return err,
-        //},
-        .delete => try deleteReportsForAddr(allocator, APP_CONFIG.key, params.ip),
+        .submit => try submitReport(
+            allocator,
+            APP_CONFIG.key,
+            params,
+            API_URL,
+        ),
+        .delete => try deleteReportsForAddr(allocator, APP_CONFIG.key, params.ip, API_URL_CLEAR),
         //else => false,
     };
 
@@ -643,7 +659,7 @@ pub fn main() !void {
 
 // Some tests - far from complete but whatever
 
-test "print args vy argv" {
+test "print args via argv" {
     const argc = std.os.argv.len;
     print("\n # args: {d}", .{argc});
     const args = std.os.argv;
