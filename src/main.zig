@@ -404,7 +404,10 @@ fn parseResponseErrors(allocator: Allocator, req: *Request) !void {
         print("\nReceived error(s):", .{});
         for (value.errors, 0..) |erro, i| {
             print("\n- Error #{d}:", .{i});
-            print("\n-- Detail: {s}\n-- Status: {d}\n-- Source: {s}", .{ erro.detail, erro.status, erro.source.?.parameter.? });
+            print("\n-- Detail: {s}\n-- Status: {d}", .{ erro.detail, erro.status });
+            if (erro.source != null) {
+                print("\n-- Source: {s}", .{erro.source.?.parameter.?});
+            }
         }
     } else {
         print("\nNo error info found in response.", .{});
