@@ -1,24 +1,24 @@
-//! Zig 0.14.0-dev.2634+b36ea592b
+//! Zig 0.14.0
 //! Submit abuse report to AbuseIPDB HTTP API.
 //! Also supports the clear-address endpoint (delete all reports for given IP).
-//! Usage: zubmit-report <action: submit|delete> <ip_addr> <categories> <comment>
-//! Example (submission): zubmit-report submit "127.0.0.1" "15,23"  "Malicious activity"
-//! Example (clear reports): zubmit-report delete "127.0.0.1"
+//! Usage: zreport <action: submit|delete> <ip_addr> <categories> <comment>
+//! Example (submission): zreport submit 127.0.0.1 "15,23"  "Malicious activity"
+//! Example (clear reports): zreport delete 127.0.0.1
 //! Configure API key in `app.conf`; file must contain valid JSON.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const http = std.http;
 const Allocator = std.mem.Allocator;
 const Request = http.Client.Request;
 const print = std.debug.print;
 
-const CONFIG_FILE_PATH: []const u8 = "./app.conf";
-
+const CONFIG_FILE_PATH: []const u8 = "./.conf";
 const HELP_MSG: []const u8 =
     \\
-    \\Usage: zubmit <action:submit|delete> <ip_addr> <categories> | <comment>
-    \\Example: zubmit submit "127.0.0.1" "15,21" "Malicious activity"
-    \\Example: zubmit delete "127.0.0.1"
+    \\Usage: zreport <action:submit|delete> <ip_addr> <categories> | <comment>
+    \\Example: zreport submit "127.0.0.1" "15,21" "Malicious activity"
+    \\Example: zreport delete "127.0.0.1"
     \\Available actions:
     \\ - submit (REPORT endpoint)
     \\ - delete (CLEAR-ADDRESS endpoint)
@@ -27,16 +27,16 @@ const HELP_MSG: []const u8 =
 
 /// Improper usage of program
 const UserError = error{
-    MissingParams,
+    //MissingParams,
     //InvalidParams,
     InvalidJSON,
     InvalidConfig,
     //MissingConfig,
-    InvalidRegex,
+    //InvalidRegex,
 };
 
 /// For errors returned by API endpoint due to user error.
-/// Unused right now.
+/// Mostly unused right now.
 const ApiUserError = error{
     TooManyRequests,
     Unauthorized,
@@ -49,18 +49,36 @@ const ReportParams = struct {
     ip: [*:0]u8,
     categories: [*:0]u8,
     comment: ?[*:0]u8 = null,
+
+    /// Tear down the params object once you're done with it.
+    /// I've juggled the comment too much and this is easier now.
+    /// Introduced while switching from argv to argsAlloc to help with my default comment bug.
+    pub fn cleanup(self: *ReportParams, allocator: Allocator) void {
+        allocator.free(std.mem.span(self.ip));
+        allocator.free(std.mem.span(self.categories));
+        if (self.comment) |cmt| {
+            allocator.free(std.mem.span(cmt));
+        }
+    }
 };
 
 /// Program config
 const ConfigData = struct {
     key: []u8,
-    //default_comment: ?[]u8,
-    // Set a default value for it:
     default_comment: ?[]u8 = null,
     debug: bool = false,
 };
 
 // Some types representing API response data.
+
+/// Api response may include different datas from various endpoints
+const ApiResponse = struct {
+    data: struct {
+        ipAddress: ?[]const u8 = null,
+        abuseConfidenceScore: ?u8 = null,
+        numReportsDeleted: ?u8 = null,
+    },
+};
 
 /// For parsing errors returned by API
 const ApiResponseErrors = struct {
@@ -70,15 +88,6 @@ const ApiResponseErrors = struct {
         source: ?struct {
             parameter: ?[]const u8 = null,
         } = null,
-    },
-};
-
-/// Api response may include different datas from various endpoints
-const ApiResponse = struct {
-    data: struct {
-        ipAddress: ?[]const u8 = null,
-        abuseConfidenceScore: ?u8 = null,
-        numReportsDeleted: ?u8 = null,
     },
 };
 
@@ -195,26 +204,26 @@ fn printIntroMsg(allocator: Allocator) !void {
 const Action = enum { submit, delete };
 
 /// Read first CL argument passed (action). Return an int representing which action to take.
-fn getIntendedAction(alloc: Allocator) !?Action {
-    const argc: usize = std.os.argv.len;
-    if (argc < 2) {
-        printErrHelp("Error: No action specified");
-        return null;
-    }
-
-    const arg1 = try std.fmt.allocPrint(alloc, "{s}", .{std.os.argv[1]});
-    defer alloc.free(arg1);
-
-    // TODO: Rewrite this as a switch to simplify adding additional actions.
-    if (std.mem.eql(u8, arg1, "submit")) {
-        return Action.submit;
-    } else if (std.mem.eql(u8, arg1, "delete")) {
-        return Action.delete;
-    } else {
-        printErrHelp("Invalid action.");
-        return null;
-    }
-}
+/// Deprecated; use getIntendedActionAlloc() instead (below).
+//fn getIntendedAction(alloc: Allocator) !?Action {
+//    const argc: usize = std.os.argv.len;
+//    if (argc < 2) {
+//        printErrHelp("Error: No action specified");
+//        return null;
+//    }
+//
+//    const arg1 = try std.fmt.allocPrint(alloc, "{s}", .{std.os.argv[1]});
+//    defer alloc.free(arg1);
+//
+//    if (std.mem.eql(u8, arg1, "submit")) {
+//        return Action.submit;
+//    } else if (std.mem.eql(u8, arg1, "delete")) {
+//        return Action.delete;
+//    } else {
+//        printErrHelp("Invalid action.");
+//        return null;
+//    }
+//}
 
 // Read first CL argument passed (action). Return as an Action enum
 fn getIntendedActionAlloc(alloc: Allocator) !?Action {
@@ -240,43 +249,80 @@ fn getIntendedActionAlloc(alloc: Allocator) !?Action {
     }
 }
 
+/// Deprecated; use validateNumArgsAlloc instead.
 /// Validate number of cli args given is >= given minimum. If not, print help text and quit.
-fn validateNumArgs(min: u4) bool {
-    const argc = std.os.argv.len;
+//fn validateNumArgs(min: u4) bool {
+//    const argc = std.os.argv.len;
+//
+//    if (argc >= min) {
+//        return true;
+//    } else {
+//        var buf: [128]u8 = undefined;
+//        const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, "\u{001b}[31mMissing required args!\u{001b}[0m {d} required, {d} given.", .{ min - 1, argc - 1 }) catch unreachable;
+//        printErrHelp(msg);
+//        return false;
+//    }
+//}
+
+fn validateNumArgsAlloc(allocator: Allocator, min: u4) bool {
+    const args = std.process.argsAlloc(allocator) catch unreachable;
+    defer std.process.argsFree(allocator, args);
+    const argc = args.len;
+
     if (argc >= min) {
         return true;
     } else {
         var buf: [128]u8 = undefined;
-        const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, "\u{001b}[31mMissing required args!\u{001b}[0m {d} required, {d} given.", .{ min, argc - 1 }) catch unreachable;
+        const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, "\u{001b}[31mMissing required args!\u{001b}[0m {d} required, {d} given.", .{ min - 1, argc - 1 }) catch unreachable;
         printErrHelp(msg);
         return false;
     }
 }
 
-/// Validate an IP address (either v4/v6).
+/// Validate an IP address (either v4/v6) - Linux only, for now.
+/// `resolveIp` returns a compiler error if cross-compiling for Windows target.
 fn validateIpAddr(addr: []const u8) bool {
-    _ = std.net.Address.resolveIp(addr, 0) catch {
-        return false;
-    };
+    if (builtin.os.tag == .linux) {
+        _ = std.net.Address.resolveIp(addr, 0) catch {
+            return false;
+        };
+    }
     return true;
 }
 
 /// Read command line args (excluding action), and return as a ReportParams struct.
 /// Linux only.
-/// TODO: Make Windows-compatible.
-fn getCliArgs() ReportParams {
-    const argc: usize = std.os.argv.len; // Get # of args passed (including #0)
+/// Deprecated; use getCliArgsAlloc() instead.
+//fn getCliArgs() ReportParams {
+//    const argc: usize = std.os.argv.len; // Get # of args passed (including #0)
+//
+//    const values = ReportParams{
+//        .ip = std.os.argv[2],
+//        .categories = if (argc >= 4) std.os.argv[3] else @constCast("15"),
+//        .comment = if (argc >= 5) std.os.argv[4] else null,
+//    };
+//
+//    return values;
+//}
 
+/// Read command line args (excluding action) and return as a ReportParams.
+fn getCliArgsAlloc(allocator: Allocator) ReportParams {
+    const args = std.process.argsAlloc(allocator) catch unreachable;
+    defer std.process.argsFree(allocator, args);
+    const argc = args.len;
+
+    const ip = allocator.dupeZ(u8, args[2]) catch unreachable;
     const values = ReportParams{
-        .ip = std.os.argv[2],
-        .categories = if (argc >= 4) std.os.argv[3] else @constCast("15"),
-        .comment = if (argc >= 5) std.os.argv[4] else null,
+        .ip = ip,
+        .categories = if (argc >= 4) allocator.dupeZ(u8, args[3]) catch unreachable else allocator.dupeZ(u8, "15") catch unreachable,
+        .comment = if (argc >= 5) allocator.dupeZ(u8, args[4]) catch unreachable else null,
     };
+    errdefer values.cleanup(allocator);
 
     return values;
 }
 
-/// Take a ReportParams and change the comment.
+/// Take a ReportParams and change the comment to new_cmt if current one is null.
 /// Return True if comment changed, else False.
 fn addDefaultComment(params: *ReportParams, new_cmt: [:0]u8) bool {
     if (params.*.comment) |val| {
@@ -327,7 +373,7 @@ fn readConfigFile(allocator: Allocator) !ConfigData {
     errdefer allocator.free(config_data.default_comment.?);
 
     std.testing.expect(config_data.key.len == 80) catch {
-        print("\nInvalid API key. A valid key should be exactly 80 bytes long; found {d}.", .{config_data.key.len});
+        print("\nInvalid API key. A valid key should be exactly 80 chars long; found {d}.", .{config_data.key.len});
         return UserError.InvalidConfig;
     };
 
@@ -366,12 +412,12 @@ fn parseResponseErrors(allocator: Allocator, req: *Request) !void {
     return;
 }
 
-/// Send a DELETE request to API_URL_CLEAR, to delete all reports for given ip addr.
+/// Send a HTTP DELETE request to API_URL_CLEAR, to delete all reports for given ip addr.
 /// Return true if successful, else false.
 fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8, API_URL_CLEAR: []const u8) !bool {
     const query_str: []const u8 = "?ipAddress=";
 
-    // Concatenate endpoint uri + query str + ip:
+    // Concatenate endpoint uri + query str + ip: (ip not known at comptime)
     const uri_complete = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ API_URL_CLEAR, query_str, ip_addr });
 
     defer alloc.free(uri_complete);
@@ -601,14 +647,15 @@ pub fn main() !void {
 
     // Validate enough args received for chosen action
     const min_args: u4 = if (action == .submit) 4 else 3; // change first val back to 5 if not adding default comment
-    const enuf_args = validateNumArgs(min_args);
+    const enuf_args = validateNumArgsAlloc(allocator, min_args);
     if (!enuf_args) {
         //return UserError.MissingParams;
         return;
     }
 
     // Read passed args
-    var params: ReportParams = getCliArgs();
+    var params: ReportParams = getCliArgsAlloc(allocator);
+    defer params.cleanup(allocator); //for CrossPlat version
 
     // Validate IP
     const ip_str: []const u8 = std.mem.span(params.ip);
@@ -618,21 +665,31 @@ pub fn main() !void {
         return;
     }
 
-    // Add default comment if one wasn't passed
+    //// Add default comment if one wasn't passed
+
+    // Keep def_cmt_z in this outer scope (NOT in the following if loop) to avoid the submitted comment being a bunch of 170s in ReleaseSafe.
+    // Will be freed later by params.cleanup in most cases, including errors (.submit, with a comment passed); other cases are handled here for now.
     const def_cmt_z = try allocator.dupeZ(u8, APP_CONFIG.default_comment.?);
-    defer allocator.free(def_cmt_z);
+
     if (action.? == .submit) {
         const comment_has_changed = addDefaultComment(&params, def_cmt_z);
         if (comment_has_changed) {
-            print("\nNo comment given. Using default. \n", .{});
+            if (APP_CONFIG.debug == true) {
+                print("\nNo comment given. Using default. \n", .{});
+            }
+        } else {
+            // In this case, go ahead and free. (i.e. a comment was given, so def_cmt_z wasn't used)
+            allocator.free(def_cmt_z);
         }
+    } else {
+        allocator.free(def_cmt_z);
     }
 
     print("\nParams:", .{});
-    print("\n  IP: {s}", .{params.ip});
+    print("\n- IP: {s}", .{params.ip});
     if (action.? == .submit) {
-        print("\n  Categories: {s}", .{params.categories});
-        print("\n  Comment: {s}", .{params.comment.?});
+        print("\n- Categories: {s}", .{params.categories});
+        print("\n- Comment: {s}", .{params.comment.?});
     }
 
     // Either submit a report, or clear reports, based on which action chosen.
@@ -660,6 +717,7 @@ pub fn main() !void {
 // Some tests - far from complete but whatever
 
 test "print args via argv" {
+    // Won't pass on Windows since argv, which is fine since I've switched to using std.process.argsAlloc
     const argc = std.os.argv.len;
     print("\n # args: {d}", .{argc});
     const args = std.os.argv;
@@ -702,19 +760,15 @@ test "AbuseIPDB category numbers" {
     try std.testing.expectEqual(@as(u8, 15), Categories.hacking.catNum());
 }
 
-test "user error - invalid/no action" {
-    const x = try getIntendedAction(std.testing.allocator);
-    try std.testing.expectEqual(null, x);
-}
-
-test "get null action (argsAlloc)" {
+test "get null/invalid action (argsAlloc)" {
     const x = try getIntendedActionAlloc(std.testing.allocator);
     try std.testing.expectEqual(null, x);
 }
 
 test "validate num of cli args" {
-    try std.testing.expect(validateNumArgs(1));
-    try std.testing.expect(validateNumArgs(8) == false);
+    const talloc = std.testing.allocator;
+    try std.testing.expect(validateNumArgsAlloc(talloc, 1));
+    try std.testing.expect(validateNumArgsAlloc(talloc, 8) == false);
 }
 
 test "add default comment to params" {
@@ -734,6 +788,7 @@ test "add default comment to params" {
 }
 
 test "read config" {
+    // Will only pass if an API key (or dummy key of 80 bytes) is configured
     const x = try readConfigFile(std.testing.allocator);
     defer std.testing.allocator.free(x.key);
     defer std.testing.allocator.free(x.default_comment.?);
