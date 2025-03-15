@@ -20,6 +20,6 @@ Examples:
 
 Build like any other (simple) Zig project.
 
-On Linux, for Linux (native): `zig build -Doptimize=ReleaseSafe`
+On Linux, for Linux (native): `zig build -Doptimize=ReleaseSafe -Dcpu=znver5`
 
-On Linux, for Windows: `zig build-exe ./src/main.zig -O ReleaseSafe -target x86_64-windows`
+On Linux, for Windows: `zig build-exe ./src/main.zig -O ReleaseSafe -target x86_64-windows -femit-bin=./BUILD/WIN/zreport.exe`
