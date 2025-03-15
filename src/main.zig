@@ -203,28 +203,6 @@ fn printIntroMsg(allocator: Allocator) !void {
 /// Allowed actions for 1st cli arg
 const Action = enum { submit, delete };
 
-/// Read first CL argument passed (action). Return an int representing which action to take.
-/// Deprecated; use getIntendedActionAlloc() instead (below).
-//fn getIntendedAction(alloc: Allocator) !?Action {
-//    const argc: usize = std.os.argv.len;
-//    if (argc < 2) {
-//        printErrHelp("Error: No action specified");
-//        return null;
-//    }
-//
-//    const arg1 = try std.fmt.allocPrint(alloc, "{s}", .{std.os.argv[1]});
-//    defer alloc.free(arg1);
-//
-//    if (std.mem.eql(u8, arg1, "submit")) {
-//        return Action.submit;
-//    } else if (std.mem.eql(u8, arg1, "delete")) {
-//        return Action.delete;
-//    } else {
-//        printErrHelp("Invalid action.");
-//        return null;
-//    }
-//}
-
 // Read first CL argument passed (action). Return as an Action enum
 fn getIntendedActionAlloc(alloc: Allocator) !?Action {
     const args = try std.process.argsAlloc(alloc);
@@ -249,21 +227,6 @@ fn getIntendedActionAlloc(alloc: Allocator) !?Action {
     }
 }
 
-/// Deprecated; use validateNumArgsAlloc instead.
-/// Validate number of cli args given is >= given minimum. If not, print help text and quit.
-//fn validateNumArgs(min: u4) bool {
-//    const argc = std.os.argv.len;
-//
-//    if (argc >= min) {
-//        return true;
-//    } else {
-//        var buf: [128]u8 = undefined;
-//        const msg: [:0]const u8 = std.fmt.bufPrintZ(&buf, "\u{001b}[31mMissing required args!\u{001b}[0m {d} required, {d} given.", .{ min - 1, argc - 1 }) catch unreachable;
-//        printErrHelp(msg);
-//        return false;
-//    }
-//}
-
 fn validateNumArgsAlloc(allocator: Allocator, min: u4) bool {
     const args = std.process.argsAlloc(allocator) catch unreachable;
     defer std.process.argsFree(allocator, args);
@@ -286,21 +249,6 @@ fn validateIpAddr(addr: []const u8) bool {
     };
     return true;
 }
-
-/// Read command line args (excluding action), and return as a ReportParams struct.
-/// Linux only.
-/// Deprecated; use getCliArgsAlloc() instead.
-//fn getCliArgs() ReportParams {
-//    const argc: usize = std.os.argv.len; // Get # of args passed (including #0)
-//
-//    const values = ReportParams{
-//        .ip = std.os.argv[2],
-//        .categories = if (argc >= 4) std.os.argv[3] else @constCast("15"),
-//        .comment = if (argc >= 5) std.os.argv[4] else null,
-//    };
-//
-//    return values;
-//}
 
 /// Read command line args (excluding action) and return as a ReportParams.
 fn getCliArgsAlloc(allocator: Allocator) ReportParams {
@@ -488,53 +436,10 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams,
     const payload: []const u8 = report_params_json;
     //print("\nReport body: {s}", .{payload}); // Debugging
 
-    // BEGIN CHUNK BEING MOVED
-
-    // Instantiate the request + add headers required by API endpoint
-    //print("\nOpening connection ...", .{});
-    //var buf: [1024]u8 = undefined;
-    //var req = try client.open(.POST, uri, .{
-    //.server_header_buffer = &buf,
-    //.extra_headers = &.{
-    //    .{ .name = "key", .value = api_key },
-    //    .{ .name = "accept", .value = "application/json" },
-    //},
-    //});
-    //defer req.deinit();
-    //req.transfer_encoding = .{ .content_length = payload.len };
-    //req.headers.content_type = .{ .override = "application/json" };
-
-    // Send request on the wire
-    //print("\nSending request to API ...", .{});
-    //print("\n- Send headers ...", .{});
-    //try req.send();
-    //print("\n- Send body ...", .{});
-    //var wtr = req.writer();
-    //try wtr.writeAll(payload);
-    //try req.finish();
-    //print("\nWaiting for response ...\n", .{});
-    //try req.wait();
-
-    // Check for 200 ok
-    //std.testing.expectEqual(.ok, req.response.status) catch {
-    //    try parseResponseErrors(allocator, &req);
-    //    return false;
-    //};
-
-    // Read response body
-    //var rdr = req.reader();
-    //const resp_body = try rdr.readAllAlloc(allocator, 1024 * 4);
-    //defer allocator.free(resp_body);
-
-    // END CHUNK BEING MOVED
-
-    // EXPERIMENTAL - MOVING ABOVE CHUNK TO A FUNCTION
-    //const resp_body = try openConnection(allocator, &client, uri, payload, api_key);
     const resp_body = openConnection(allocator, &client, uri, payload, api_key) catch {
         return false;
     };
     defer allocator.free(resp_body);
-    // END EXPERIMENTAL
 
     // Parse response JSON + print it
     // Reference: https://cookbook.ziglang.cc/10-01-json.html
