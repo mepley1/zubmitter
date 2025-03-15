@@ -1,5 +1,6 @@
 .zig-cache/
 zig-out/
 WINDOWS-BUILDS/
+BUILD/
 .conf
 notes.md
