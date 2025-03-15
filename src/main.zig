@@ -279,14 +279,11 @@ fn validateNumArgsAlloc(allocator: Allocator, min: u4) bool {
     }
 }
 
-/// Validate an IP address (either v4/v6) - Linux only, for now.
-/// `resolveIp` returns a compiler error if cross-compiling for Windows target.
+/// Validate given IP address (either v4/v6)
 fn validateIpAddr(addr: []const u8) bool {
-    if (builtin.os.tag == .linux) {
-        _ = std.net.Address.resolveIp(addr, 0) catch {
-            return false;
-        };
-    }
+    _ = std.net.Address.parseIp(addr, 0) catch {
+        return false;
+    };
     return true;
 }
 
@@ -611,6 +608,7 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
 /// Main loop.
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
+    //var gpa: std.heap.DebugAllocator(.{}) = .init; // New convention
     _ = gpa.detectLeaks();
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -755,7 +753,7 @@ test "validate an inputted ip address" {
     x = validateIpAddr("2001:db8::1");
     try std.testing.expect(x);
     // v6 bad
-    x = validateIpAddr("2001:db8::g");
+    x = validateIpAddr("2001:db8::xxxx");
     try std.testing.expectEqual(false, x);
 }
 
