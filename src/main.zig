@@ -46,27 +46,28 @@ const ApiUserError = error{
 };
 
 /// Holds report params. Returned by getCliArgs()
+/// TODO Find a better name for this?
 const ReportParams = struct {
-    ip: [*:0]u8,
-    categories: [*:0]u8,
-    comment: ?[*:0]u8 = null,
+    ip: []const u8,
+    categories: []const u8,
+    comment: ?[]const u8 = null,
 
     /// Tear down the params object once you're done with it.
     /// I've juggled the comment too much and this is easier now.
     /// Introduced while switching from argv to argsAlloc to help with my default comment bug.
     pub fn cleanup(self: *ReportParams, allocator: Allocator) void {
-        allocator.free(std.mem.span(self.ip));
-        allocator.free(std.mem.span(self.categories));
+        allocator.free(self.ip);
+        allocator.free(self.categories);
         if (self.comment) |cmt| {
-            allocator.free(std.mem.span(cmt));
+            allocator.free(cmt);
         }
     }
 };
 
 /// Program config
 const ConfigData = struct {
-    key: []u8,
-    default_comment: ?[]u8 = null,
+    key: []const u8,
+    default_comment: ?[]const u8 = null,
     debug: bool = false,
 };
 
@@ -127,7 +128,7 @@ const Categories = enum(u8) {
 };
 
 /// Print some feedback text, along with the help msg.
-fn printErrHelp(msg: [:0]const u8) void {
+fn printErrHelp(msg: []const u8) void {
     print("\n{s}", .{msg});
     print("\n{s}", .{HELP_MSG});
     return;
@@ -256,11 +257,13 @@ fn getCliArgsAlloc(allocator: Allocator) ReportParams {
     defer std.process.argsFree(allocator, args);
     const argc = args.len;
 
-    const ip = allocator.dupeZ(u8, args[2]) catch unreachable;
+    const ip: []const u8 = allocator.dupe(u8, args[2]) catch unreachable;
+
     const values = ReportParams{
         .ip = ip,
-        .categories = if (argc >= 4) allocator.dupeZ(u8, args[3]) catch unreachable else allocator.dupeZ(u8, "15") catch unreachable,
-        .comment = if (argc >= 5) allocator.dupeZ(u8, args[4]) catch unreachable else null,
+        //.categories = if (argc >= 4) allocator.dupe(u8, args[3]) catch unreachable else allocator.dupe(u8, "15") catch unreachable,
+        .categories = if (argc >= 4) allocator.dupe(u8, args[3]) catch unreachable else "15",
+        .comment = if (argc >= 5) allocator.dupe(u8, args[4]) catch unreachable else null,
     };
     errdefer values.cleanup(allocator);
 
@@ -269,7 +272,7 @@ fn getCliArgsAlloc(allocator: Allocator) ReportParams {
 
 /// Take a ReportParams and change the comment to new_cmt if current one is null.
 /// Return True if comment changed, else False.
-fn addDefaultComment(params: *ReportParams, new_cmt: [:0]u8) bool {
+fn addDefaultComment(params: *ReportParams, new_cmt: []const u8) bool {
     if (params.*.comment) |val| {
         _ = val;
         return false;
@@ -281,7 +284,7 @@ fn addDefaultComment(params: *ReportParams, new_cmt: [:0]u8) bool {
 
 /// Read and parse config file, return config values as a ConfigData struct.
 /// File must be in same dir as command is being run from.
-/// Caller must free returned result.key and result.default_comment.?
+/// Caller must free returned `result.key` and `result.default_comment.?`
 fn readConfigFile(allocator: Allocator) !ConfigData {
     const cwd = std.fs.cwd();
     const handle = cwd.openFile(CONFIG_FILE_PATH, .{
@@ -295,7 +298,7 @@ fn readConfigFile(allocator: Allocator) !ConfigData {
     // Read file
     const file_bytes = try handle.readToEndAlloc(allocator, 512);
     defer allocator.free(file_bytes);
-    const config_file_data = file_bytes[0..];
+    const config_file_data: []const u8 = file_bytes[0..];
 
     //Parse JSON
     const parsed = std.json.parseFromSlice(ConfigData, allocator, config_file_data, .{
@@ -308,7 +311,7 @@ fn readConfigFile(allocator: Allocator) !ConfigData {
 
     // Dupe the values to avoid seg fault
     // Function caller will need to free these.
-    const config_data = ConfigData{
+    const config_data: ConfigData = ConfigData{
         .key = try allocator.dupe(u8, value.key),
         .default_comment = try allocator.dupe(u8, value.default_comment.?),
         .debug = if (value.debug) true else false,
@@ -362,12 +365,11 @@ fn parseResponseErrors(allocator: Allocator, req: *Request) !void {
 
 /// Send a HTTP DELETE request to API_URL_CLEAR, to delete all reports for given ip addr.
 /// Return true if successful, else false.
-fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8, API_URL_CLEAR: []const u8) !bool {
+fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: []const u8, API_URL_CLEAR: []const u8) !bool {
     const query_str: []const u8 = "?ipAddress=";
 
     // Concatenate endpoint uri + query str + ip: (ip not known at comptime)
     const uri_complete = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ API_URL_CLEAR, query_str, ip_addr });
-
     defer alloc.free(uri_complete);
 
     const uri = try std.Uri.parse(uri_complete);
@@ -423,7 +425,7 @@ fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8,
 /// Submit a report to API REPORT endpoint. Return true if successful, else false.
 fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams, API_URL: []const u8) !bool {
     // Params were read from cli args
-    const report_params = params;
+    const report_params: ReportParams = params;
 
     // Jsonify report params
     const report_params_json = try std.json.stringifyAlloc(allocator, report_params, .{ .whitespace = .minified });
@@ -506,7 +508,6 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
     // Check for 200 ok
     std.testing.expectEqual(.ok, req.response.status) catch {
         try parseResponseErrors(allocator, &req);
-        //return false;
         return ApiUserError.Something;
     };
 
@@ -541,7 +542,7 @@ pub fn main() !void {
     try printIntroMsg(allocator);
 
     // Read and set config
-    const APP_CONFIG = readConfigFile(allocator) catch |err| {
+    const APP_CONFIG: ConfigData = readConfigFile(allocator) catch |err| {
         try printStyled(allocator, .red, "\nError parsing config! Check that config file contains valid JSON.");
         print("\n{}\n", .{err});
         return err;
@@ -565,7 +566,6 @@ pub fn main() !void {
     }
 
     // Read action arg (1st CLI arg) and set const accordingly.
-    //const action = try getIntendedAction(allocator);
     const action: ?Action = try getIntendedActionAlloc(allocator);
     if (action == null) {
         return;
@@ -584,7 +584,8 @@ pub fn main() !void {
     defer params.cleanup(allocator); //for CrossPlat version
 
     // Validate IP
-    const ip_str: []const u8 = std.mem.span(params.ip);
+    //const ip_str: []const u8 = std.mem.span(params.ip);
+    const ip_str = params.ip;
     const ip_is_valid: bool = validateIpAddr(ip_str);
     if (!ip_is_valid) {
         try printStyled(allocator, .red, "\nInvalid IP address.\n");
@@ -593,9 +594,11 @@ pub fn main() !void {
 
     //// Add default comment if one wasn't passed
 
-    // Keep def_cmt_z in this outer scope (NOT in the following if loop) to avoid the submitted comment being a bunch of 170s in ReleaseSafe.
-    // Will be freed later by params.cleanup in most cases, including errors (.submit, with a comment passed); other cases are handled here for now.
-    const def_cmt_z = try allocator.dupeZ(u8, APP_CONFIG.default_comment.?);
+    // Keep def_cmt_z in this outer scope (NOT in the following if loop) to avoid the submitted comment being junk in ReleaseSafe.
+    // Will be freed later by params.cleanup in most cases, including errors (.submit, with a comment passed);
+    // other cases are handled here for now.
+    //const def_cmt_z = try allocator.dupeZ(u8, APP_CONFIG.default_comment.?);
+    const def_cmt_z = try allocator.dupe(u8, APP_CONFIG.default_comment.?);
 
     if (action.? == .submit) {
         const comment_has_changed = addDefaultComment(&params, def_cmt_z);
@@ -732,4 +735,25 @@ test "join strings (not really necessary, just testing similar method)" {
 test "escape codes" {
     const x = try printStyled(std.testing.allocator, .magenta, "\nTest: This text should Magenta colored\n");
     try std.testing.expect(@TypeOf(x) == void);
+}
+
+test "comptime staticStringMap" {
+    const action_map = std.StaticStringMap(Action).initComptime(.{
+        .{ "submit", .submit },
+        .{ "s", .submit },
+        .{ "sub", .submit },
+        .{ "report", .submit },
+        .{ "delete", .delete },
+        .{ "d", .delete },
+        .{ "del", .delete },
+        .{ "clear-address", .delete },
+        .{ "clear", .delete },
+    });
+
+    const x = action_map.get("s");
+    try std.testing.expect(x == .submit);
+
+    // bitcast a str to int
+    const y = @as(u32, @bitCast("aaa".*));
+    print("\ny: {any}\n", .{y});
 }
