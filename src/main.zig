@@ -14,6 +14,7 @@ const Request = http.Client.Request;
 const print = std.debug.print;
 
 const CONFIG_FILE_PATH: []const u8 = "./.conf";
+const UA: []const u8 = "ZReport by mepley.net";
 const HELP_MSG: []const u8 =
     \\
     \\Usage: zreport <action:submit|delete> <ip_addr> <categories> | <comment>
@@ -378,12 +379,13 @@ fn deleteReportsForAddr(alloc: Allocator, api_key: []const u8, ip_addr: [*:0]u8,
 
     // Server headers buffer
     print("\nOpening connection ...", .{});
-    var buf: [1024]u8 = undefined;
+    var srv_hdr_buf: [1024]u8 = undefined;
     var req = try client.open(.DELETE, uri, .{
-        .server_header_buffer = &buf,
+        .server_header_buffer = &srv_hdr_buf,
         .extra_headers = &.{
             .{ .name = "key", .value = api_key },
             .{ .name = "accept", .value = "application/json" },
+            .{ .name = "user-agent", .value = UA },
         },
     });
     defer req.deinit();
@@ -445,8 +447,10 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams,
     // Reference: https://cookbook.ziglang.cc/10-01-json.html
     const parsed = std.json.parseFromSlice(ApiResponse, allocator, resp_body, .{ .ignore_unknown_fields = true }) catch |err| switch (err) {
         std.json.Error.SyntaxError => {
-            print("\nError while parsing response body: {}", .{err});
-            // Debugging with fake API; don't print this in release
+            print("\nError or unexpected data structure while parsing response body: {}", .{err});
+            print("\nAre you hitting the right API endpoint?", .{});
+            // Debugging with fake API; don't print this in release.
+            // SyntaxError happens because my fake 'testing api' doesn't return the data we're expecting.
             if (resp_body.len < 256) {
                 print("\nReponse body: {s}", .{resp_body});
             } else {
@@ -454,7 +458,14 @@ fn submitReport(allocator: Allocator, api_key: []const u8, params: ReportParams,
             }
             return false;
         },
-        else => return err,
+        else => {
+            print("\nError or unexpected data structure while parsing response body: {}", .{err});
+            if (resp_body.len < 128) {
+                print("\nReponse body: {s}", .{resp_body});
+            }
+            //return err;
+            return false;
+        },
     };
     defer parsed.deinit();
 
@@ -475,6 +486,7 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
         .extra_headers = &.{
             .{ .name = "key", .value = api_key },
             .{ .name = "accept", .value = "application/json" },
+            .{ .name = "user-agent", .value = UA }, //this gets appended to the http.zig UA
         },
     });
     defer req.deinit();
@@ -501,7 +513,7 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
 
     // Read response body
     var rdr = req.reader();
-    const resp_body: []const u8 = try rdr.readAllAlloc(allocator, 1024 * 4);
+    const resp_body: []const u8 = rdr.readAllAlloc(allocator, 1024 * 4) catch unreachable;
     defer allocator.free(resp_body);
 
     //return resp_body;
