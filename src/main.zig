@@ -217,14 +217,13 @@ fn getIntendedActionAlloc(alloc: Allocator) !?Action {
     const arg1 = try std.fmt.allocPrint(alloc, "{s}", .{args[1]});
     defer alloc.free(arg1);
 
-    // TODO: Rewrite this as a switch to simplify adding additional actions.
-    if (std.mem.eql(u8, arg1, "submit")) {
-        return Action.submit;
-    } else if (std.mem.eql(u8, arg1, "delete")) {
-        return Action.delete;
-    } else {
-        printErrHelp("Invalid action.");
+    const action: ?Action = std.meta.stringToEnum(Action, arg1);
+    if (action == null) {
+        printStyled(alloc, .red, "\nError: Invalid action") catch unreachable;
+        printErrHelp("");
         return null;
+    } else {
+        return action.?;
     }
 }
 
@@ -513,7 +512,16 @@ fn openConnection(allocator: Allocator, client: *http.Client, uri: std.Uri, payl
 
     // Read response body
     var rdr = req.reader();
-    const resp_body: []const u8 = rdr.readAllAlloc(allocator, 1024 * 4) catch unreachable;
+    const resp_body: []const u8 = rdr.readAllAlloc(allocator, 1024 * 4) catch |err| switch (err) {
+        error.StreamTooLong => {
+            print("\nError: Response larger than expected max_size.\n{}", .{err});
+            return err;
+        },
+        else => {
+            print("\nError reading response.", .{});
+            return err;
+        },
+    };
     defer allocator.free(resp_body);
 
     //return resp_body;
