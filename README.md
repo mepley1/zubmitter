@@ -6,6 +6,8 @@ Supports the REPORT and CLEAR-ADDRESS api endpoints.
 
 ~~Linux only, for now.~~ Compatible with both Linux/Windows.
 
+Written while learning Zig, so there are some code smells / bad architecture to be found.
+
 ## Usage
 
 `zreport <action: submit|delete> <ip_addr> <categories> <comment>`
